@@ -13,6 +13,18 @@ function activate(context) {
 
         panel.webview.html = getWebviewContent();
 
+        // 👇 THIS IS IMPORTANT
+        panel.webview.onDidReceiveMessage(
+            message => {
+                if (message.command === "voiceClicked") {
+                    console.log("Message from Webview:", message.text);
+                    vscode.window.showInformationMessage(message.text);
+                }
+            },
+            undefined,
+            context.subscriptions
+        );
+
     });
 
     context.subscriptions.push(disposable);
@@ -24,9 +36,18 @@ function getWebviewContent() {
         <html>
         <body>
             <h1>VoxCode AI</h1>
-            <button onclick="alert('Voice coming soon')">
-                🎙 Start Voice
-            </button>
+            <button id="voiceBtn">🎙 Start Voice</button>
+
+            <script>
+                const vscode = acquireVsCodeApi();
+
+                document.getElementById("voiceBtn").addEventListener("click", () => {
+                    vscode.postMessage({
+                        command: "voiceClicked",
+                        text: "User clicked voice button"
+                    });
+                });
+            </script>
         </body>
         </html>
     `;
