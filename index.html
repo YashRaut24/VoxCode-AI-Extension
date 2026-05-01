@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+
+<body>
+    <h1>VoxCode AI</h1>
+
+    <input id="input-text" placeholder="Enter text" />
+    <button id="sendTextBtn">Send Text</button>
+
+    <br><br>
+
+    <button id="startBtn">🎤 Start Listening</button>
+    <p id="output">Speech will appear here...</p>
+
+    <script>
+ let mediaRecorder;
+    let audioChunks = [];
+
+    startBtn.addEventListener("click", async () => {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = (event) => {
+            audioChunks.push(event.data);
+        };
+
+        mediaRecorder.onstop = async () => {
+            const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
+            const formData = new FormData();
+            formData.append("audio", audioBlob, "recording.wav");
+
+            output.innerText = "Processing audio...";
+
+            try {
+               const res = await fetch("http://localhost:5000/api/ai", {
+                    method: "POST",
+                    body: formData
+                });
+
+                const data = await res.json();
+
+                // 🔥 ADD THIS ERROR HANDLING
+                if (data.error) {
+                    console.error("Backend error:", data.error);
+                    output.innerText = "Error: " + data.error;
+                    return;
+                }
+
+                output.innerText = data.response;
+
+                // Send to extension
+              if (typeof acquireVsCodeApi !== "undefined") {
+                    const vscode = acquireVsCodeApi();
+                    vscode.postMessage({
+                        command: "voiceClicked",
+                        text: data.response
+                    });
+                } else {
+                    console.log("Browser mode:", data.response);
+                }
+
+            } catch (err) {
+                console.error(err);
+                output.innerText = "Error sending audio";
+            }
+        };
+
+        mediaRecorder.start();
+        output.innerText = "Recording... Click again to stop";
+
+        // Stop on second click
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
+
+        startBtn.addEventListener("click", async () => {
+
+            if (!isRecording) {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: "audio/webm"
+                });
+
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+
+                mediaRecorder.onstop = async () => {
+
+                    if (audioChunks.length === 0) {
+                        output.innerText = "No audio captured!";
+                        return;
+                    }
+
+                    const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
+
+                    console.log("Audio size:", audioBlob.size);
+
+                    if (audioBlob.size === 0) {
+                        output.innerText = "Empty audio!";
+                        return;
+                    }
+
+                    const formData = new FormData();
+                    formData.append("audio", audioBlob, "recording.webm");
+
+                    output.innerText = "Processing...";
+
+                    try {
+                        const res = await fetch("http://localhost:5000/api/ai", {
+                            method: "POST",
+                            body: formData
+                        });
+
+                        const data = await res.json();
+
+                        if (data.error) {
+                            output.innerText = "Error: " + data.error;
+                            return;
+                        }
+
+                        output.innerText = data.response;
+
+                        if (typeof acquireVsCodeApi !== "undefined") {
+                            const vscode = acquireVsCodeApi();
+                            vscode.postMessage({
+                                command: "voiceClicked",
+                                text: data.response
+                            });
+                        }
+
+                    } catch (err) {
+                        console.error(err);
+                        output.innerText = "Request failed";
+                    }
+                };
+
+                mediaRecorder.start();
+                isRecording = true;
+                output.innerText = "Recording... click again to stop";
+
+            } else {
+                mediaRecorder.stop();
+                isRecording = false;
+                output.innerText = "Stopping...";
+            }
+        });
+    });
+    </script>
+</body>
+
+</html>
