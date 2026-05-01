@@ -98,17 +98,69 @@ function getWebviewContent() {
     <html>
     <body>
         <h1>VoxCode AI</h1>
-        <button id="voiceBtn">🎙 Start Voice</button>
+
         <input id="input-text" placeholder="Enter text"/>
+        <button id="sendTextBtn">Send Text</button>
+
+        <br><br>
+
+        <button id="startBtn">🎤 Start Listening</button>
+        <p id="output">Speech will appear here...</p>
 
         <script>
             const vscode = acquireVsCodeApi();
+
             const inputText = document.getElementById("input-text");
-            document.getElementById("voiceBtn").addEventListener("click", () => {
+            const output = document.getElementById("output");
+            const startBtn = document.getElementById("startBtn");
+            const sendBtn = document.getElementById("sendTextBtn");
+
+            // ✅ Speech Recognition Setup
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+            if (!SpeechRecognition) {
+                output.innerText = "Speech Recognition not supported in this environment";
+            } else {
+                const recognition = new SpeechRecognition();
+
+                recognition.lang = "en-US";
+                recognition.continuous = false;
+
+                // 🎤 Start Listening
+                startBtn.addEventListener("click", () => {
+                    recognition.start();
+                    output.innerText = "Listening...";
+                });
+
+                // 🧠 When speech is captured
+                recognition.onresult = (event) => {
+                    const text = event.results[0][0].transcript;
+                    output.innerText = text;
+
+                    vscode.postMessage({
+                        command: "voiceClicked",
+                        text: text
+                    });
+                };
+
+                // ❗ Error handling
+                recognition.onerror = (event) => {
+                    output.innerText = "Error: " + event.error;
+                    console.log("Speech error:", event.error);
+                };
+            }
+
+            // ⌨️ Text input send
+            sendBtn.addEventListener("click", () => {
+                const text = inputText.value;
+                if (!text) return;
+
                 vscode.postMessage({
                     command: "voiceClicked",
-                    text: inputText.value
+                    text: text
                 });
+
+                inputText.value = "";
             });
         </script>
     </body>
