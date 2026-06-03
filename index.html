@@ -13,145 +13,85 @@
     <p id="output">Speech will appear here...</p>
 
     <script>
- let mediaRecorder;
+    let mediaRecorder;
     let audioChunks = [];
+    let isRecording = false;
+
+    const startBtn = document.getElementById("startBtn");
+    const output = document.getElementById("output");
 
     startBtn.addEventListener("click", async () => {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-        mediaRecorder = new MediaRecorder(stream);
-        audioChunks = [];
+        if (!isRecording) {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-        mediaRecorder.ondataavailable = (event) => {
-            audioChunks.push(event.data);
-        };
+            mediaRecorder = new MediaRecorder(stream, {
+                mimeType: "audio/webm"
+            });
 
-        mediaRecorder.onstop = async () => {
-            const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
-            const formData = new FormData();
-            formData.append("audio", audioBlob, "recording.wav");
+            audioChunks = [];
 
-            output.innerText = "Processing audio...";
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    audioChunks.push(event.data);
+                }
+            };
 
-            try {
-               const res = await fetch("http://localhost:5000/api/ai", {
-                    method: "POST",
-                    body: formData
-                });
+            mediaRecorder.onstop = async () => {
 
-                const data = await res.json();
+                const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
 
-                // 🔥 ADD THIS ERROR HANDLING
-                if (data.error) {
-                    console.error("Backend error:", data.error);
-                    output.innerText = "Error: " + data.error;
+                if (audioBlob.size === 0) {
+                    output.innerText = "Empty audio!";
                     return;
                 }
 
-                output.innerText = data.response;
+                const formData = new FormData();
+                formData.append("audio", audioBlob, "recording.webm");
 
-                // Send to extension
-              if (typeof acquireVsCodeApi !== "undefined") {
-                    const vscode = acquireVsCodeApi();
-                    vscode.postMessage({
-                        command: "voiceClicked",
-                        text: data.response
+                output.innerText = "Processing...";
+
+                try {
+                    const res = await fetch("http://localhost:5000/api/ai", {
+                        method: "POST",
+                        body: formData
                     });
-                } else {
-                    console.log("Browser mode:", data.response);
-                }
 
-            } catch (err) {
-                console.error(err);
-                output.innerText = "Error sending audio";
-            }
-        };
+                    const data = await res.json();
 
-        mediaRecorder.start();
-        output.innerText = "Recording... Click again to stop";
-
-        // Stop on second click
-        let mediaRecorder;
-        let audioChunks = [];
-        let isRecording = false;
-
-        startBtn.addEventListener("click", async () => {
-
-            if (!isRecording) {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-                mediaRecorder = new MediaRecorder(stream, {
-                    mimeType: "audio/webm"
-                });
-
-                audioChunks = [];
-
-                mediaRecorder.ondataavailable = (event) => {
-                    if (event.data.size > 0) {
-                        audioChunks.push(event.data);
-                    }
-                };
-
-                mediaRecorder.onstop = async () => {
-
-                    if (audioChunks.length === 0) {
-                        output.innerText = "No audio captured!";
+                    if (data.error) {
+                        output.innerText = "Error: " + data.error;
                         return;
                     }
 
-                    const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
+                    // 🔥 USE INTENT HERE
+                    output.innerText = `[${data.intent}] ${data.response}`;
 
-                    console.log("Audio size:", audioBlob.size);
-
-                    if (audioBlob.size === 0) {
-                        output.innerText = "Empty audio!";
-                        return;
-                    }
-
-                    const formData = new FormData();
-                    formData.append("audio", audioBlob, "recording.webm");
-
-                    output.innerText = "Processing...";
-
-                    try {
-                        const res = await fetch("http://localhost:5000/api/ai", {
-                            method: "POST",
-                            body: formData
+                    if (typeof acquireVsCodeApi !== "undefined") {
+                        const vscode = acquireVsCodeApi();
+                        vscode.postMessage({
+                            command: "voiceClicked",
+                            text: data.response
                         });
-
-                        const data = await res.json();
-
-                        if (data.error) {
-                            output.innerText = "Error: " + data.error;
-                            return;
-                        }
-
-                        output.innerText = data.response;
-
-                        if (typeof acquireVsCodeApi !== "undefined") {
-                            const vscode = acquireVsCodeApi();
-                            vscode.postMessage({
-                                command: "voiceClicked",
-                                text: data.response
-                            });
-                        }
-
-                    } catch (err) {
-                        console.error(err);
-                        output.innerText = "Request failed";
+                    } else {
+                        console.log("Browser mode:", data);
                     }
-                };
 
-                mediaRecorder.start();
-                isRecording = true;
-                output.innerText = "Recording... click again to stop";
+                } catch (err) {
+                    console.error(err);
+                    output.innerText = "Request failed";
+                }
+            };
 
-            } else {
-                mediaRecorder.stop();
-                isRecording = false;
-                output.innerText = "Stopping...";
-            }
-        });
+            mediaRecorder.start();
+            isRecording = true;
+            output.innerText = "Recording... click again to stop";
+
+        } else {
+            mediaRecorder.stop();
+            isRecording = false;
+            output.innerText = "Stopping...";
+        }
     });
     </script>
 </body>
