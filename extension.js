@@ -80,8 +80,12 @@ function activate(context) {
                     language,
                     fileName
                 });
+                
+                const config = vscode.workspace.getConfiguration('voxcode');
+                const serverUrl = config.get('serverUrl') ?? 'http://localhost:5000';
+                const endpoint = `${serverUrl}/api/ai`;
 
-                const res = await fetch("http://localhost:5000/api/ai", {
+                const res = await fetch(endpoint, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
