@@ -14,11 +14,13 @@ let lastEditor = null;
  */
 function activate(context) {
 
-    vscode.window.onDidChangeActiveTextEditor(editor => {
-        if (editor) {
-            lastEditor = editor;
-        }
-    });
+    context.subscriptions.push(
+        vscode.window.onDidChangeActiveTextEditor(editor => {
+            if (editor) {
+                lastEditor = editor;
+            }
+        })
+    );
     const disposable = vscode.commands.registerCommand('voxcode.openPanel', function () {
 
         const panel = vscode.window.createWebviewPanel(
@@ -37,13 +39,7 @@ function activate(context) {
                 const prompt = message.text ?? "";
 
                 try {
-                    const res = await fetch("http://localhost:5000/api/ai", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ prompt })
-                    });
-
-                    const data = await res.json();
+              
 
                     console.log("Active Editor:", vscode.window.activeTextEditor);
                     console.log("Visible Editors:", vscode.window.visibleTextEditors.length);
@@ -70,14 +66,57 @@ function activate(context) {
                     editor = await vscode.window.showTextDocument(doc);
                 }
 
-                const text = data.response ?? "";
+                const selectedCode = editor.document.getText(editor.selection);
+
+                const fullCode = editor.document.getText();
+
+                const language = editor.document.languageId;
+
+                const fileName = editor.document.fileName;
+
+                console.log({
+                    prompt,
+                    selectedCode,
+                    language,
+                    fileName
+                });
+
+                const res = await fetch("http://localhost:5000/api/ai", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        prompt,
+                        selectedCode,
+                        fullCode,
+                        language,
+                        fileName
+                    })
+                });
+
+                // Check HTTP status before reading body
+                if (!res.ok) {
+                    const errorBody = await res.text();
+                    throw new Error(`Server returned ${res.status}: ${errorBody}`);
+                }
+
+                // Read body exactly once
+                const data = await res.json();
+
+                console.log("Server response:", data);
+                console.log("Selected Code:", selectedCode);
+                console.log("Full Code Length:", fullCode.length);
+                console.log("Language:", language);
+                console.log("File Name:", fileName);
+
+                const text = typeof data.response === 'string' ? data.response : '';
 
                 // Insert text
+                const selection = editor.selection;
                 await editor.edit(editBuilder => {
-                    if (!editor.selection.isEmpty) {
-                        editBuilder.replace(editor.selection, text);
+                    if (!selection.isEmpty) {
+                        editBuilder.replace(selection, text);
                     } else {
-                        editBuilder.insert(editor.selection.active, text);
+                        editBuilder.insert(selection.active, text);
                     }
                 });
                 } catch (err) {
