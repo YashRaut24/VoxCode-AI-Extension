@@ -9,18 +9,29 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [
-    "*"
-  ],
+  "activationEvents": ["onCommand:voxcode.openPanel"],
+  
   "main": "./extension.js",
   "contributes": {
     "commands": [
-      {
-        "command": "voxcode.openPanel",
-        "title": "VoxCode: Open Voice Panel"
-      }
-    ]
-  },
+        {
+            "command": "voxcode.openPanel",
+            "title": "Open Voice Panel",
+            "category": "VoxCode"
+        }
+    ],
+    "configuration": {
+        "title": "VoxCode AI",
+        "properties": {
+            "voxcode.serverUrl": {
+                "type": "string",
+                "default": "http://localhost:5000",
+                "description": "Base URL of the VoxCode AI server."
+            }
+        }
+    }
+},
+
   "scripts": {
     "lint": "eslint .",
     "pretest": "npm run lint",
