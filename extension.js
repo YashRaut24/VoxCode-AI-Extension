@@ -38,6 +38,8 @@ function activate(context) {
 
                 const prompt = message.text ?? "";
 
+                panel.webview.postMessage({ status: "loading" });
+
                 try {
               
 
@@ -123,9 +125,12 @@ function activate(context) {
                         editBuilder.insert(selection.active, text);
                     }
                 });
+
+                panel.webview.postMessage({ status: "success" });
                 } catch (err) {
                     const message = err instanceof Error ? err.message : String(err);
                     vscode.window.showErrorMessage("Error: " + message);
+                    panel.webview.postMessage({ status: "error", message });
                 }
             }
         });
@@ -139,71 +144,212 @@ function getWebviewContent() {
     return `
     <!DOCTYPE html>
     <html>
+    <head>
+    <style>
+        body {
+            font-family: var(--vscode-font-family);
+            color: var(--vscode-foreground);
+            background-color: var(--vscode-editor-background);
+            padding: 20px;
+        }
+
+        h1 {
+            font-size: 1.3em;
+            margin-bottom: 16px;
+        }
+
+        .input-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        input {
+            flex: 1;
+            padding: 8px;
+            background-color: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-input-border);
+            border-radius: 4px;
+            font-size: 1em;
+        }
+
+        input:disabled {
+            opacity: 0.5;
+        }
+
+        button {
+            padding: 8px 14px;
+            background-color: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1em;
+        }
+
+        button:hover:not(:disabled) {
+            background-color: var(--vscode-button-hoverBackground);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .voice-row {
+            margin-bottom: 16px;
+        }
+
+        #status {
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 0.95em;
+            min-height: 20px;
+        }
+
+        .status-idle {
+            color: var(--vscode-descriptionForeground);
+        }
+
+        .status-loading {
+            color: var(--vscode-charts-yellow);
+        }
+
+        .status-success {
+            color: var(--vscode-charts-green);
+        }
+
+        .status-error {
+            color: var(--vscode-errorForeground);
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 2px solid var(--vscode-charts-yellow);
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 6px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+    </head>
     <body>
         <h1>VoxCode AI</h1>
 
-        <input id="input-text" placeholder="Enter text"/>
-        <button id="sendTextBtn">Send Text</button>
+        <div class="input-row">
+            <input id="input-text" placeholder="Type a coding instruction..."/>
+            <button id="sendTextBtn">Send</button>
+        </div>
 
-        <br><br>
+        <div class="voice-row">
+            <button id="startBtn">🎤 Start Listening</button>
+        </div>
 
-        <button id="startBtn">🎤 Start Listening</button>
-        <p id="output">Speech will appear here...</p>
+        <div id="status" class="status-idle">Ready</div>
 
         <script>
             const vscode = acquireVsCodeApi();
 
             const inputText = document.getElementById("input-text");
-            const output = document.getElementById("output");
+            const status = document.getElementById("status");
             const startBtn = document.getElementById("startBtn");
             const sendBtn = document.getElementById("sendTextBtn");
 
-            // ✅ Speech Recognition Setup
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            let currentState = "idle";
 
-            if (!SpeechRecognition) {
-                output.innerText = "Speech Recognition not supported in this environment";
-            } else {
-                const recognition = new SpeechRecognition();
+            function setState(state, message) {
+                currentState = state;
 
-                recognition.lang = "en-US";
-                recognition.continuous = false;
+                inputText.disabled = state === "loading";
+                sendBtn.disabled = state === "loading";
+                startBtn.disabled = state === "loading";
 
-                // 🎤 Start Listening
-                startBtn.addEventListener("click", () => {
-                    recognition.start();
-                    output.innerText = "Listening...";
-                });
+                status.className = "status-" + state;
 
-                // 🧠 When speech is captured
-                recognition.onresult = (event) => {
-                    const text = event.results[0][0].transcript;
-                    output.innerText = text;
+                if (state === "loading") {
+                    status.innerHTML = '<span class="spinner"></span>VoxCode is thinking...';
+                } else if (state === "success") {
+                    status.innerText = "Code inserted successfully";
+                } else if (state === "error") {
+                    status.innerText = message || "Something went wrong. Try again.";
+                } else {
+                    status.innerText = "Ready";
+                }
 
-                    vscode.postMessage({
-                        command: "voiceClicked",
-                        text: text
-                    });
-                };
-
-                // ❗ Error handling
-                recognition.onerror = (event) => {
-                    output.innerText = "Error: " + event.error;
-                    console.log("Speech error:", event.error);
-                };
+                // Auto-return to idle after success or error
+                if (state === "success" || state === "error") {
+                    setTimeout(() => {
+                        if (currentState === state) {
+                            setState("idle");
+                        }
+                    }, 3000);
+                }
             }
 
-            // ⌨️ Text input send
-            sendBtn.addEventListener("click", () => {
-                const text = inputText.value;
-                if (!text) return;
+            // Listen for status updates from the extension
+            window.addEventListener("message", (event) => {
+                const data = event.data;
+                if (data.status) {
+                    setState(data.status, data.message);
+                }
+            });
+
+            function sendPrompt(text) {
+                if (!text || currentState === "loading") return;
 
                 vscode.postMessage({
                     command: "voiceClicked",
                     text: text
                 });
+            }
 
+            // Speech Recognition Setup
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+            if (!SpeechRecognition) {
+                startBtn.disabled = true;
+                startBtn.title = "Speech Recognition not supported in this environment";
+            } else {
+                const recognition = new SpeechRecognition();
+                recognition.lang = "en-US";
+                recognition.continuous = false;
+
+                startBtn.addEventListener("click", () => {
+                    if (currentState === "loading") return;
+                    recognition.start();
+                    status.className = "status-loading";
+                    status.innerText = "Listening...";
+                });
+
+                recognition.onresult = (event) => {
+                    const text = event.results[0][0].transcript;
+                    sendPrompt(text);
+                };
+
+                recognition.onerror = (event) => {
+                    setState("error", "Speech error: " + event.error);
+                };
+            }
+
+            // Text input send
+            sendBtn.addEventListener("click", () => {
+                const text = inputText.value;
+                sendPrompt(text);
                 inputText.value = "";
+            });
+
+            inputText.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") {
+                    sendBtn.click();
+                }
             });
         </script>
     </body>
