@@ -14,6 +14,9 @@ let lastEditor = null;
  */
 function activate(context) {
 
+    const outputChannel = vscode.window.createOutputChannel("VoxCode AI");
+    context.subscriptions.push(outputChannel);
+
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor(editor => {
             if (editor) {
@@ -114,17 +117,29 @@ function activate(context) {
                 console.log("Language:", language);
                 console.log("File Name:", fileName);
 
-                const text = typeof data.response === 'string' ? data.response : '';
+               const text = typeof data.response === 'string' ? data.response : '';
+                const intent = typeof data.intent === 'string' ? data.intent : 'WRITE';
 
-                // Insert text
-                const selection = editor.selection;
-                await editor.edit(editBuilder => {
-                    if (!selection.isEmpty) {
-                        editBuilder.replace(selection, text);
-                    } else {
-                        editBuilder.insert(selection.active, text);
-                    }
-                });
+                console.log("Intent received:", intent);
+
+                if (intent === "EXPLAIN" || intent === "DEBUG") {
+                    // Show in output channel, never touch the editor
+                    outputChannel.clear();
+                    outputChannel.appendLine(`[${intent}] ${prompt}`);
+                    outputChannel.appendLine("");
+                    outputChannel.appendLine(text);
+                    outputChannel.show(true);
+                } else {
+                    // WRITE or REFACTOR — insert or replace in editor
+                    const selection = editor.selection;
+                    await editor.edit(editBuilder => {
+                        if (!selection.isEmpty) {
+                            editBuilder.replace(selection, text);
+                        } else {
+                            editBuilder.insert(selection.active, text);
+                        }
+                    });
+                }
 
                 panel.webview.postMessage({ status: "success" });
                 } catch (err) {
