@@ -1,13 +1,98 @@
 //extension.js
 
 // @ts-check
-
+console.log("=== VOXCODE EXTENSION FILE LOADED ===");
 const vscode = require('vscode');
 const fetch = require("node-fetch");
+const path = require('path');
 /** @type {import('vscode').TextEditor | null} */
 
 /** @type {import('vscode').TextEditor | null} */
 let lastEditor = null;
+
+const ALLOWED_EXTENSIONS = ['.js', '.ts', '.jsx', '.tsx', '.py', '.java', '.json', '.md', '.css', '.html', '.go', '.rs', '.c', '.cpp', '.cs'];
+const EXCLUDED_PATH_SEGMENTS = ['node_modules', '.git', 'dist', 'build', '.vscode-test'];
+const MAX_ADDITIONAL_FILES = 5;
+const MAX_CHARS_PER_FILE = 2000;
+const MAX_TOTAL_CONTEXT_CHARS = 8000;
+
+/**
+ * @param {string} filePath
+ * @returns {boolean}
+ */
+function isEligibleFile(filePath) {
+    const hasAllowedExtension = ALLOWED_EXTENSIONS.some(ext => filePath.endsWith(ext));
+    const isExcludedPath = EXCLUDED_PATH_SEGMENTS.some(segment => filePath.includes(segment));
+    return hasAllowedExtension && !isExcludedPath;
+}
+
+/**
+ * @param {string} activeFileName
+ * @returns {Promise<Array<{fileName: string, content: string}>>}
+ */
+async function gatherWorkspaceContext(activeFileName) {
+    /** @type {Array<{fileName: string, content: string}>} */
+    const fileContents = [];
+   /** @type {Set<string>} */
+    const seenPaths = new Set();
+        let totalChars = 0;
+    /**
+ * @param {string} filePath
+ * @param {string} content
+ */
+function addFile(filePath, content) {
+        if (seenPaths.has(filePath)) return false;
+        if (fileContents.length >= MAX_ADDITIONAL_FILES) return false;
+        if (totalChars >= MAX_TOTAL_CONTEXT_CHARS) return false;
+
+        const truncated = content.slice(0, MAX_CHARS_PER_FILE);
+        fileContents.push({ fileName: filePath, content: truncated });
+        seenPaths.add(filePath);
+        totalChars += truncated.length;
+        return true;
+    }
+
+    // 1. Open editor tabs
+    for (const editor of vscode.window.visibleTextEditors) {
+        const filePath = editor.document.fileName;
+        if (filePath === activeFileName) continue; // skip the active file, already sent separately
+        if (!isEligibleFile(filePath)) continue;
+
+        addFile(filePath, editor.document.getText());
+    }
+
+    // 2. Sibling files in the same directory as the active file
+    try {
+        const activeDirPath = path.dirname(activeFileName);
+        const activeDir = vscode.Uri.file(activeDirPath);
+        const dirEntries = await vscode.workspace.fs.readDirectory(activeDir);
+
+        for (const [name, type] of dirEntries) {
+            if (type !== vscode.FileType.File) continue;
+
+            const siblingPath = path.join(activeDirPath, name);
+            if (siblingPath === activeFileName) continue;
+            if (!isEligibleFile(siblingPath)) continue;
+            if (seenPaths.has(siblingPath)) continue;
+
+            try {
+                const fileUri = vscode.Uri.file(siblingPath);
+                const bytes = await vscode.workspace.fs.readFile(fileUri);
+                const content = Buffer.from(bytes).toString('utf8');
+                addFile(siblingPath, content);
+            } catch (readErr) {
+                console.log("Skipping unreadable sibling file:", siblingPath);
+            }
+        }
+    } catch (dirErr) {
+        const message = dirErr instanceof Error ? dirErr.message : String(dirErr);
+        console.log("Could not read sibling directory:", message);
+    }
+
+    return fileContents;
+}
+
+
 
 /**
  * @param {vscode.ExtensionContext} context
@@ -85,6 +170,9 @@ function activate(context) {
                     language,
                     fileName
                 });
+
+                const workspaceContext = await gatherWorkspaceContext(fileName);
+                console.log(`Gathered ${workspaceContext.length} additional context files`);
                 
                 const config = vscode.workspace.getConfiguration('voxcode');
                 const serverUrl = config.get('serverUrl') ?? 'http://localhost:5000';
@@ -94,12 +182,13 @@ function activate(context) {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
-                        prompt,
-                        selectedCode,
-                        fullCode,
-                        language,
-                        fileName
-                    })
+                    prompt,
+                    selectedCode,
+                    fullCode,
+                    language,
+                    fileName,
+                    workspaceContext
+                })
                 });
 
                 // Check HTTP status before reading body
