@@ -12,6 +12,7 @@ let lastEditor = null;
 
 const ALLOWED_EXTENSIONS = ['.js', '.ts', '.jsx', '.tsx', '.py', '.java', '.json', '.md', '.css', '.html', '.go', '.rs', '.c', '.cpp', '.cs'];
 const EXCLUDED_PATH_SEGMENTS = ['node_modules', '.git', 'dist', 'build', '.vscode-test'];
+const EXCLUDED_FILENAMES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'];
 const MAX_ADDITIONAL_FILES = 5;
 const MAX_CHARS_PER_FILE = 2000;
 const MAX_TOTAL_CONTEXT_CHARS = 8000;
@@ -21,11 +22,12 @@ const MAX_TOTAL_CONTEXT_CHARS = 8000;
  * @returns {boolean}
  */
 function isEligibleFile(filePath) {
+    const fileName = path.basename(filePath);
     const hasAllowedExtension = ALLOWED_EXTENSIONS.some(ext => filePath.endsWith(ext));
     const isExcludedPath = EXCLUDED_PATH_SEGMENTS.some(segment => filePath.includes(segment));
-    return hasAllowedExtension && !isExcludedPath;
-}
-
+    const isExcludedFile = EXCLUDED_FILENAMES.includes(fileName);
+    return hasAllowedExtension && !isExcludedPath && !isExcludedFile;
+}   
 /**
  * @param {string} activeFileName
  * @returns {Promise<Array<{fileName: string, content: string}>>}
@@ -81,7 +83,8 @@ function addFile(filePath, content) {
                 const content = Buffer.from(bytes).toString('utf8');
                 addFile(siblingPath, content);
             } catch (readErr) {
-                console.log("Skipping unreadable sibling file:", siblingPath);
+                const message = readErr instanceof Error ? readErr.message : String(readErr);
+                console.log("Skipping unreadable sibling file:", siblingPath, "Reason:", message);
             }
         }
     } catch (dirErr) {
@@ -173,7 +176,8 @@ function activate(context) {
 
                 const workspaceContext = await gatherWorkspaceContext(fileName);
                 console.log(`Gathered ${workspaceContext.length} additional context files`);
-                
+                console.log(JSON.stringify(workspaceContext.map(f => ({ fileName: f.fileName, length: f.content.length }))));
+
                 const config = vscode.workspace.getConfiguration('voxcode');
                 const serverUrl = config.get('serverUrl') ?? 'http://localhost:5000';
                 const endpoint = `${serverUrl}/api/ai`;
