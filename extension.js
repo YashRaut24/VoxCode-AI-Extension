@@ -182,59 +182,105 @@ function activate(context) {
                 const serverUrl = config.get('serverUrl') ?? 'http://localhost:5000';
                 const endpoint = `${serverUrl}/api/ai`;
 
-                const res = await fetch(endpoint, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                    prompt,
-                    selectedCode,
-                    fullCode,
-                    language,
-                    fileName,
-                    workspaceContext
-                })
-                });
+               const res = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+        prompt,
+        selectedCode,
+        fullCode,
+        language,
+        fileName,
+        workspaceContext
+    })
+});
 
-                // Check HTTP status before reading body
-                if (!res.ok) {
-                    const errorBody = await res.text();
-                    throw new Error(`Server returned ${res.status}: ${errorBody}`);
+if (!res.ok) {
+    const errorBody = await res.text();
+    throw new Error(`Server returned ${res.status}: ${errorBody}`);
+}
+
+// --- Streaming response handler ---
+outputChannel.clear();
+outputChannel.appendLine(`[VoxCode] ${prompt}`);
+outputChannel.appendLine("");
+outputChannel.show(true);
+
+panel.webview.postMessage({ status: "streaming" });
+
+let fullText = "";
+let streamBuffer = "";
+
+await new Promise((resolve, reject) => {
+    res.body.on("data", (chunk) => {
+        streamBuffer += chunk.toString();
+        const lines = streamBuffer.split("\n");
+        streamBuffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const data = line.slice(6).trim();
+
+            if (data === "[DONE]") {
+                resolve(undefined);
+                return;
+            }
+
+            try {
+                const parsed = JSON.parse(data);
+
+                if (parsed.error) {
+                    reject(new Error(parsed.error));
+                    return;
                 }
 
-                // Read body exactly once
-                const data = await res.json();
-
-                console.log("Server response:", data);
-                console.log("Selected Code:", selectedCode);
-                console.log("Full Code Length:", fullCode.length);
-                console.log("Language:", language);
-                console.log("File Name:", fileName);
-
-               const text = typeof data.response === 'string' ? data.response : '';
-                const intent = typeof data.intent === 'string' ? data.intent : 'WRITE';
-
-                console.log("Intent received:", intent);
-
-                if (intent === "EXPLAIN" || intent === "DEBUG") {
-                    // Show in output channel, never touch the editor
-                    outputChannel.clear();
-                    outputChannel.appendLine(`[${intent}] ${prompt}`);
-                    outputChannel.appendLine("");
-                    outputChannel.appendLine(text);
-                    outputChannel.show(true);
-                } else {
-                    // WRITE or REFACTOR — insert or replace in editor
-                    const selection = editor.selection;
-                    await editor.edit(editBuilder => {
-                        if (!selection.isEmpty) {
-                            editBuilder.replace(selection, text);
-                        } else {
-                            editBuilder.insert(selection.active, text);
-                        }
-                    });
+                if (parsed.token) {
+                    fullText += parsed.token;
+                    outputChannel.append(parsed.token);
                 }
+            } catch {
+                // skip malformed chunks
+            }
+        }
+    });
 
-                panel.webview.postMessage({ status: "success" });
+    res.body.on("end", () => resolve(undefined));
+    res.body.on("error", (err) => reject(err));
+});
+
+// --- Parse intent from first line ---
+const lines = fullText.split("\n");
+const firstLine = lines[0].trim();
+let intent = "WRITE";
+let responseText = fullText;
+
+if (firstLine.startsWith("INTENT:")) {
+    intent = firstLine.replace("INTENT:", "").trim();
+    responseText = lines.slice(1).join("\n").trim();
+}
+
+console.log("Intent received:", intent);
+console.log("Full response length:", fullText.length);
+
+// --- Act based on intent ---
+if (intent === "WRITE" || intent === "REFACTOR") {
+    const selection = editor.selection;
+    await editor.edit(editBuilder => {
+        if (!selection.isEmpty) {
+            editBuilder.replace(selection, responseText);
+        } else {
+            editBuilder.insert(selection.active, responseText);
+        }
+    });
+}
+
+// Update Output Channel header with real intent
+outputChannel.clear();
+outputChannel.appendLine(`[${intent}] ${prompt}`);
+outputChannel.appendLine("");
+outputChannel.appendLine(responseText);
+
+panel.webview.postMessage({ status: "success" });
                 } catch (err) {
                     const message = err instanceof Error ? err.message : String(err);
                     vscode.window.showErrorMessage("Error: " + message);
@@ -376,16 +422,19 @@ function getWebviewContent() {
             function setState(state, message) {
                 currentState = state;
 
-                inputText.disabled = state === "loading";
-                sendBtn.disabled = state === "loading";
-                startBtn.disabled = state === "loading";
+                const isBusy = state === "loading" || state === "streaming";
+                inputText.disabled = isBusy;
+                sendBtn.disabled = isBusy;
+                startBtn.disabled = isBusy;
 
                 status.className = "status-" + state;
 
                 if (state === "loading") {
-                    status.innerHTML = '<span class="spinner"></span>VoxCode is thinking...';
+                    status.innerHTML = '<span class="spinner"></span>Connecting...';
+                } else if (state === "streaming") {
+                    status.innerHTML = '<span class="spinner"></span>VoxCode is writing...';
                 } else if (state === "success") {
-                    status.innerText = "Code inserted successfully";
+                    status.innerText = "Done ✓";
                 } else if (state === "error") {
                     status.innerText = message || "Something went wrong. Try again.";
                 } else {
