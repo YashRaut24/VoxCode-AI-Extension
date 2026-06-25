@@ -1,7 +1,6 @@
 //extension.js
 
 // @ts-check
-console.log("=== VOXCODE EXTENSION FILE LOADED ===");
 const vscode = require('vscode');
 const fetch = require("node-fetch");
 const path = require('path');
@@ -10,93 +9,34 @@ const path = require('path');
 /** @type {import('vscode').TextEditor | null} */
 let lastEditor = null;
 
-const ALLOWED_EXTENSIONS = ['.js', '.ts', '.jsx', '.tsx', '.py', '.java', '.json', '.md', '.css', '.html', '.go', '.rs', '.c', '.cpp', '.cs'];
-const EXCLUDED_PATH_SEGMENTS = ['node_modules', '.git', 'dist', 'build', '.vscode-test'];
-const EXCLUDED_FILENAMES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'];
-const MAX_ADDITIONAL_FILES = 5;
-const MAX_CHARS_PER_FILE = 2000;
-const MAX_TOTAL_CONTEXT_CHARS = 8000;
 
 /**
  * @param {string} filePath
  * @returns {boolean}
  */
-function isEligibleFile(filePath) {
-    const fileName = path.basename(filePath);
-    const hasAllowedExtension = ALLOWED_EXTENSIONS.some(ext => filePath.endsWith(ext));
-    const isExcludedPath = EXCLUDED_PATH_SEGMENTS.some(segment => filePath.includes(segment));
-    const isExcludedFile = EXCLUDED_FILENAMES.includes(fileName);
-    return hasAllowedExtension && !isExcludedPath && !isExcludedFile;
-}   
+
+
+
+
 /**
- * @param {string} activeFileName
- * @returns {Promise<Array<{fileName: string, content: string}>>}
+ * @param {string} workspacePath
+ * @param {string} serverUrl
  */
-async function gatherWorkspaceContext(activeFileName) {
-    /** @type {Array<{fileName: string, content: string}>} */
-    const fileContents = [];
-   /** @type {Set<string>} */
-    const seenPaths = new Set();
-        let totalChars = 0;
-    /**
- * @param {string} filePath
- * @param {string} content
- */
-function addFile(filePath, content) {
-        if (seenPaths.has(filePath)) return false;
-        if (fileContents.length >= MAX_ADDITIONAL_FILES) return false;
-        if (totalChars >= MAX_TOTAL_CONTEXT_CHARS) return false;
-
-        const truncated = content.slice(0, MAX_CHARS_PER_FILE);
-        fileContents.push({ fileName: filePath, content: truncated });
-        seenPaths.add(filePath);
-        totalChars += truncated.length;
-        return true;
-    }
-
-    // 1. Open editor tabs
-    for (const editor of vscode.window.visibleTextEditors) {
-        const filePath = editor.document.fileName;
-        if (filePath === activeFileName) continue; // skip the active file, already sent separately
-        if (!isEligibleFile(filePath)) continue;
-
-        addFile(filePath, editor.document.getText());
-    }
-
-    // 2. Sibling files in the same directory as the active file
+async function triggerWorkspaceIndex(workspacePath, serverUrl) {
     try {
-        const activeDirPath = path.dirname(activeFileName);
-        const activeDir = vscode.Uri.file(activeDirPath);
-        const dirEntries = await vscode.workspace.fs.readDirectory(activeDir);
-
-        for (const [name, type] of dirEntries) {
-            if (type !== vscode.FileType.File) continue;
-
-            const siblingPath = path.join(activeDirPath, name);
-            if (siblingPath === activeFileName) continue;
-            if (!isEligibleFile(siblingPath)) continue;
-            if (seenPaths.has(siblingPath)) continue;
-
-            try {
-                const fileUri = vscode.Uri.file(siblingPath);
-                const bytes = await vscode.workspace.fs.readFile(fileUri);
-                const content = Buffer.from(bytes).toString('utf8');
-                addFile(siblingPath, content);
-            } catch (readErr) {
-                const message = readErr instanceof Error ? readErr.message : String(readErr);
-                console.log("Skipping unreadable sibling file:", siblingPath, "Reason:", message);
-            }
+        const endpoint = `${serverUrl}/api/index`;
+        const res = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workspacePath })
+        });
+        if (res.ok) {
+            console.log("Workspace indexing triggered:", workspacePath);
         }
-    } catch (dirErr) {
-        const message = dirErr instanceof Error ? dirErr.message : String(dirErr);
-        console.log("Could not read sibling directory:", message);
+    } catch (err) {
+        console.warn("Could not trigger workspace indexing:", err instanceof Error ? err.message : String(err));
     }
-
-    return fileContents;
 }
-
-
-
 /**
  * @param {vscode.ExtensionContext} context
  */
@@ -104,6 +44,43 @@ function activate(context) {
 
     const outputChannel = vscode.window.createOutputChannel("VoxCode AI");
     context.subscriptions.push(outputChannel);
+
+    // Trigger workspace indexing when extension activates
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (workspaceFolders && workspaceFolders.length > 0) {
+        const workspacePath = workspaceFolders[0].uri.fsPath;
+        const config = vscode.workspace.getConfiguration('voxcode');
+        const serverUrl = config.get('serverUrl') ?? 'http://localhost:5000';
+        triggerWorkspaceIndex(workspacePath, serverUrl);
+    }
+
+    // Watch for file changes and update index incrementally
+    const watcher = vscode.workspace.createFileSystemWatcher("**/*");
+
+    context.subscriptions.push(
+        watcher.onDidChange(async (uri) => {
+            const config = vscode.workspace.getConfiguration('voxcode');
+            const serverUrl = config.get('serverUrl') ?? 'http://localhost:5000';
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            const workspacePath = workspaceFolders?.[0]?.uri.fsPath ?? '';
+            await fetch(`${serverUrl}/api/reindex`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ filePath: uri.fsPath, workspacePath })
+            }).catch(() => {}); // silent fail — indexing is best-effort
+        }),
+        watcher.onDidDelete(async (uri) => {
+            const config = vscode.workspace.getConfiguration('voxcode');
+            const serverUrl = config.get('serverUrl') ?? 'http://localhost:5000';
+            await fetch(`${serverUrl}/api/reindex`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ filePath: uri.fsPath, deleted: true })
+            }).catch(() => {});
+        }),
+        watcher
+    );
+
 
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor(editor => {
@@ -174,26 +151,25 @@ function activate(context) {
                     fileName
                 });
 
-                const workspaceContext = await gatherWorkspaceContext(fileName);
-                console.log(`Gathered ${workspaceContext.length} additional context files`);
-                console.log(JSON.stringify(workspaceContext.map(f => ({ fileName: f.fileName, length: f.content.length }))));
 
                 const config = vscode.workspace.getConfiguration('voxcode');
                 const serverUrl = config.get('serverUrl') ?? 'http://localhost:5000';
                 const endpoint = `${serverUrl}/api/ai`;
-
+                const workspaceFolders = vscode.workspace.workspaceFolders;
+                const workspacePath = workspaceFolders?.[0]?.uri.fsPath ?? '';
                const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-        prompt,
-        selectedCode,
-        fullCode,
-        language,
-        fileName,
-        workspaceContext
-    })
-});
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+
+                body: JSON.stringify({
+                    prompt,
+                    selectedCode,
+                    fullCode,
+                    language,
+                    fileName,
+                    workspacePath
+                })
+            });
 
 if (!res.ok) {
     const errorBody = await res.text();
